@@ -1,0 +1,7 @@
+pandas
+numpy
+librosa
+lightgbm
+joblib
+tqdm
+tqdm-joblib
