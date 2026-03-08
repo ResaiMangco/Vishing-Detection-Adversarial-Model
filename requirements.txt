@@ -6,3 +6,7 @@ torch
 joblib
 tqdm
 tqdm-joblib
+
+scikit-learn
+torch
+torchaudio
