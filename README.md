@@ -2,7 +2,6 @@
 
 ## Note: 
 In Test Mode: Remove All sections for test only before using for full datasets
-Extractions
 
 ## Folder Structure (Before Running)
 
@@ -35,7 +34,8 @@ When you run the notebook, it will automatically:
 - Extract prosodic features from each audio file
 - Cache the extracted features in the `feature_cache/` folder for reuse
 - Train the prosodic model
-- Save the trained model as `Trained-Prosodic-Model.joblib`
+- Save the trained model as `Trained-Prosodic-Model.joblib` in Models folder
+- Save the Scaler model as `Prosodic-Scaler.joblib` in Models folder
 
 ---
 ## Folder Structure (After Running)
@@ -47,8 +47,9 @@ Vishing-Detection-Prosodic-Model/
 │
 ├── Prosodic-Model.ipynb
 ├── requirements.txt
-├── Trained-Prosodic-Model.joblib
-│
+├── Models
+│   ├── Trained-Prosodic-Model.joblib
+|   └── Prosodic-Scaler.joblib
 └── ASVspoof5/
     ├── ...
     ├── ASVspoof5_protocols/

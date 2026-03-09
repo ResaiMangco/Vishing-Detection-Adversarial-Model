@@ -1,7 +1,8 @@
 pandas
 numpy
 librosa
-lightgbm
+skorch
+torch
 joblib
 tqdm
 tqdm-joblib
