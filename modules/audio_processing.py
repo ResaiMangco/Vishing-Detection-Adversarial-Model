@@ -1,7 +1,8 @@
+from __future__ import annotations
+
 import torchaudio
 import torch
 
-from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 from torch import nn
