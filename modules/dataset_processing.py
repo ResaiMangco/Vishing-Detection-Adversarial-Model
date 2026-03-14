@@ -9,6 +9,7 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 import torchaudio
+import soundfile as sf
 
 
 PROTOCOL_COLUMNS = [
@@ -101,7 +102,13 @@ class WaveformDataset(Dataset[Dict[str, object]]):
         }
 
     def _load_waveform(self, file_path: str) -> torch.Tensor:
-        waveform, sample_rate = torchaudio.load(file_path)
+        try:
+            waveform, sample_rate = torchaudio.load(file_path)
+        except (RuntimeError, OSError, ImportError):
+            # TorchCodec can fail when FFmpeg shared libraries are unavailable.
+            audio_array, sample_rate = sf.read(file_path, always_2d=True, dtype="float32")
+            waveform = torch.from_numpy(audio_array.T)
+
         waveform = waveform.to(torch.float32)
 
         if waveform.shape[0] > 1:
@@ -143,8 +150,13 @@ def resolve_layout(data_root: str | Path) -> DataLayout:
         eval_audio_root=root / SPLIT_TO_AUDIO_DIR["eval"],
     )
 
-def extract_archives(data_root: str | Path) -> None:
-    """Extracts the dataset's .tar and .tar.gz files if not extracted yet."""
+def extract_archives(data_root: str | Path, max_items: Optional[int] = None) -> None:
+    """
+        Extracts dataset archives, optionally limiting extracted audio items.
+
+        When ``max_items`` is provided, extraction of split audio archives stops after
+        that many archive members have been extracted in total.
+    """
     layout = resolve_layout(data_root)
 
     protocol_archive = layout.data_root / "ASVspoof5_protocols.tar.gz"
@@ -154,16 +166,34 @@ def extract_archives(data_root: str | Path) -> None:
 
     for split, archive_prefix in SPLIT_TO_ARCHIVE_PREFIX.items():
         target_dir = layout.data_root / SPLIT_TO_AUDIO_DIR[split]
+        print(target_dir)
         if target_dir.exists():
+            print(f"{target_dir} already exists.")
             continue
 
         archive_paths = sorted(layout.data_root.glob(f"{archive_prefix}*.tar"))
+        print(archive_paths)
         if not archive_paths:
+            print(f"No archive paths found for split {split}")
             continue
 
+        remaining_items = max_items
         for archive_path in archive_paths:
+            if remaining_items is not None and remaining_items <= 0:
+                break
+
             with tarfile.open(archive_path, mode="r") as archive_handle:
-                archive_handle.extractall(path=layout.data_root)
+                if remaining_items is None:
+                    archive_handle.extractall(path=layout.data_root)
+                    continue
+
+                members = archive_handle.getmembers()
+                selected_members = members[:remaining_items]
+                if not selected_members:
+                    continue
+
+                archive_handle.extractall(path=layout.data_root, members=selected_members)
+                remaining_items -= len(selected_members)
 
 def load_asvspoof_tsv(tsv_path: str | Path) -> pd.DataFrame:
     """Loads a protocol TSV file into a DataFrame."""
