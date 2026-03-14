@@ -93,3 +93,52 @@ class SpectrogramClassifier(nn.Module):
 
 
 # ===[[ Prosodic-based Model ]]===
+
+@dataclass(frozen=True)
+class ProsodyMLPConfig:
+    input_dim: int = 49
+    num_classes: int = 2
+    hidden_dims: tuple = (128, 64)
+    dropout: float = 0.5
+    noise_std: float = 0.1
+
+
+class ProsodyMLP(nn.Module):
+    """MLP architecture for Prosodic-based Model"""
+    def __init__(self, config: Optional[ProsodyMLPConfig] = None) -> None:
+        super().__init__()
+        self.config = config or ProsodyMLPConfig()
+
+        layers = []
+        prev_dim = self.config.input_dim
+        for hidden_dim in self.config.hidden_dims:
+            layers.append(nn.Linear(prev_dim, hidden_dim))
+            layers.append(nn.BatchNorm1d(hidden_dim))
+            layers.append(nn.GELU())
+            layers.append(nn.Dropout(self.config.dropout))
+            prev_dim = hidden_dim
+
+        self.hidden = nn.Sequential(*layers)
+        self.head = nn.Linear(prev_dim, self.config.num_classes)
+
+        # Residual projection when input_dim != first hidden dim
+        first_h = self.config.hidden_dims[0] if self.config.hidden_dims else prev_dim
+        self.residual_proj = (
+            nn.Linear(self.config.input_dim, first_h, bias=False)
+            if self.config.input_dim != first_h
+            else nn.Identity()
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Gaussian noise augmentation during training
+        if self.training and self.config.noise_std > 0:
+            x = x + torch.randn_like(x) * self.config.noise_std
+
+        # Apply first block with residual connection
+        block_size = 4  # Linear + BN + GELU + Dropout
+        first_block = self.hidden[:block_size]
+        rest = self.hidden[block_size:]
+
+        h = first_block(x) + self.residual_proj(x)
+        h = rest(h)
+        return self.head(h)
