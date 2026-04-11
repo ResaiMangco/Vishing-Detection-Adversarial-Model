@@ -96,11 +96,12 @@ class SpectrogramClassifier(nn.Module):
 
 @dataclass(frozen=True)
 class ProsodyMLPConfig:
-    input_dim: int = 49
+    input_dim: int = 85
     num_classes: int = 2
-    hidden_dims: tuple = (128, 64)
-    dropout: float = 0.5
-    noise_std: float = 0.1
+    hidden_dims: tuple = (512, 256, 128, 64)
+    dropout: float = 0.4
+    noise_std: float = 0.2
+    use_attention: bool = True 
 
 
 class ProsodyMLP(nn.Module):
@@ -108,6 +109,12 @@ class ProsodyMLP(nn.Module):
     def __init__(self, config: Optional[ProsodyMLPConfig] = None) -> None:
         super().__init__()
         self.config = config or ProsodyMLPConfig()
+
+        # Feature attention
+        self.feature_attention = nn.Sequential(
+            nn.Linear(self.config.input_dim, self.config.input_dim),
+            nn.Sigmoid()
+        )
 
         layers = []
         prev_dim = self.config.input_dim
@@ -134,6 +141,11 @@ class ProsodyMLP(nn.Module):
         if self.training and self.config.noise_std > 0:
             x = x + torch.randn_like(x) * self.config.noise_std
 
+        # Apply feature attention
+        if self.config.use_attention:
+            attention_weights = self.feature_attention(x)
+            x = x * attention_weights
+            
         # Apply first block with residual connection
         block_size = 4  # Linear + BN + GELU + Dropout
         first_block = self.hidden[:block_size]
