@@ -35,25 +35,25 @@ class ConvBlock(nn.Module):
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         return self.layers(inputs)
 
-
 class SpectrogramCNN(nn.Module):
-    """CNN architecture for Spectrogram-based Model"""
+    """CNN architecture for Spectrogram-based Model - Improved"""
     def __init__(self, config: Optional[SpectrogramCNNConfig] = None) -> None:
         super().__init__()
 
         self.config = config or SpectrogramCNNConfig()
         channels = self.config.base_channels
 
-        # Define feature extractor, pooling layer, and classifier head
+        # Deeper feature extractor
         self.feature_extractor = nn.Sequential(
-            ConvBlock(1, channels),
+            ConvBlock(1, channels),           # Input will be 1 channel for now
             ConvBlock(channels, channels * 2),
             ConvBlock(channels * 2, channels * 4),
+            ConvBlock(channels * 4, channels * 8),   # <-- Added extra block
         )
         self.pool = nn.AdaptiveAvgPool2d((1, 1))
         self.classifier = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(channels * 4, self.config.embedding_dim),
+            nn.Linear(channels * 8, self.config.embedding_dim),  # Updated from *4 to *8
             nn.ReLU(inplace=True),
             nn.Dropout(p=self.config.dropout),
             nn.Linear(self.config.embedding_dim, self.config.num_classes),
