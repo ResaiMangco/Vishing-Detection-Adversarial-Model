@@ -77,19 +77,17 @@ class WaveformToLogMelSpectrogram(nn.Module):
 import librosa
 import numpy as np
 
-
 PROSODIC_FEATURE_COLUMNS = [
     # Pitch
     "f0_mean", "f0_std", "f0_range", "f0_slope",
+    "f0_skew", "f0_kurtosis", "f0_q25", "f0_q75",
     # Energy
     "rms_mean", "rms_std", "rms_max",
-    # Speaking rate
-    "zcr_mean", "zcr_std",
-    # Rhythm & voicing
-    "tempo", "voiced_ratio",
-    # Pitch dynamics
+    "rms_skew", "rms_kurtosis",
+    # Rhythm
+    "tempo", "voiced_ratio", "pause_ratio",
+    # Delta
     "f0_delta_mean", "f0_delta_std",
-    # Energy dynamics
     "rms_delta_mean", "rms_delta_std",
     # MFCCs
     *[f"mfcc{i}_mean" for i in range(13)],
@@ -106,9 +104,14 @@ PROSODIC_FEATURE_COLUMNS = [
     "spectral_flux_mean", "spectral_flux_std",
     # Voice quality
     "jitter", "shimmer", "harmonics_to_noise_ratio",
+    "f1_mean", "f1_std",
+    "f2_mean", "f2_std",
+    "f3_mean", "f3_std",
     # Chroma
     "chroma_mean", "chroma_std",
 ]
+
+# Update your config class if needed (no change required)
 
 @dataclass(frozen=True)
 class ProsodicFeatureConfig:
@@ -116,169 +119,200 @@ class ProsodicFeatureConfig:
     fmin: float = librosa.note_to_hz('C2')
     fmax: float = librosa.note_to_hz('C7')
 
+import parselmouth
+import numpy as np
+import librosa
+from scipy.stats import skew, kurtosis
 
 def extract_prosodic_features(
     file_path: str,
     config: Optional[ProsodicFeatureConfig] = None,
 ) -> dict:
-    """Extracts prosodic features (pitch, energy, rate, tempo, voicing) from an audio file."""
+    """Improved prosodic feature extraction for ASVspoof5 / Vishing detection."""
     config = config or ProsodicFeatureConfig()
     y, sr = librosa.load(file_path, sr=config.sr)
 
-    # Pitch (F0) via yin
-    f0 = librosa.yin(y, fmin=config.fmin, fmax=config.fmax)
-    voiced_flag = (f0 > config.fmin) & (f0 < config.fmax)
+    # === Better Pitch with pyin ===
+    f0, voiced_flag, voiced_prob = librosa.pyin(
+        y, fmin=config.fmin, fmax=config.fmax, sr=sr, fill_na=0.0
+    )
+    voiced_flag = voiced_flag.astype(bool)
     f0_voiced = f0[voiced_flag]
 
+    # Pitch stats
     pitch_feats = {
-        "f0_mean":  np.nanmean(f0_voiced) if len(f0_voiced) else 0,
-        "f0_std":   np.nanstd(f0_voiced)  if len(f0_voiced) else 0,
-        "f0_range": np.nanmax(f0_voiced) - np.nanmin(f0_voiced) if len(f0_voiced) else 0,
-        "f0_slope": np.polyfit(np.arange(len(f0_voiced)), f0_voiced, 1)[0] if len(f0_voiced) > 1 else 0,
+        "f0_mean": np.nanmean(f0_voiced) if len(f0_voiced) else 0.0,
+        "f0_std": np.nanstd(f0_voiced) if len(f0_voiced) else 0.0,
+        "f0_range": np.nanmax(f0_voiced) - np.nanmin(f0_voiced) if len(f0_voiced) else 0.0,
+        "f0_slope": np.polyfit(np.arange(len(f0_voiced)), f0_voiced, 1)[0] if len(f0_voiced) > 1 else 0.0,
+        "f0_skew": skew(f0_voiced) if len(f0_voiced) > 2 else 0.0,
+        "f0_kurtosis": kurtosis(f0_voiced) if len(f0_voiced) > 2 else 0.0,
+        "f0_q25": np.nanquantile(f0_voiced, 0.25) if len(f0_voiced) else 0.0,
+        "f0_q75": np.nanquantile(f0_voiced, 0.75) if len(f0_voiced) else 0.0,
     }
 
     # Energy (RMS)
     rms = librosa.feature.rms(y=y)[0]
     energy_feats = {
         "rms_mean": np.mean(rms),
-        "rms_std":  np.std(rms),
-        "rms_max":  np.max(rms),
+        "rms_std": np.std(rms),
+        "rms_max": np.max(rms),
+        "rms_skew": skew(rms) if len(rms) > 2 else 0.0,
+        "rms_kurtosis": kurtosis(rms) if len(rms) > 2 else 0.0,
     }
 
-    # Speaking rate (zero-crossing rate)
-    zcr = librosa.feature.zero_crossing_rate(y)[0]
-    rate_feats = {
-        "zcr_mean": np.mean(zcr),
-        "zcr_std":  np.std(zcr),
-    }
+    # Tempo (more reliable)
+    tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
+    tempo = float(tempo[0]) if len(tempo) > 0 else 0.0
 
-    # Tempo via autocorrelation
-    onset_env = librosa.onset.onset_strength(y=y, sr=sr)
-    ac = np.correlate(onset_env, onset_env, mode='full')
-    ac = ac[len(ac) // 2:]
-    hop_length = 512
-    min_lag = int(60.0 / 300 * sr / hop_length)
-    max_lag = int(60.0 / 30 * sr / hop_length)
-    ac_search = ac[min_lag:max_lag]
-    if len(ac_search) > 0:
-        best_lag = min_lag + np.argmax(ac_search)
-        tempo = 60.0 * sr / (best_lag * hop_length)
-    else:
-        tempo = 0.0
+    # Voiced / Pause ratio
+    voiced_ratio = np.mean(voiced_flag) if len(voiced_flag) else 0.0
+    # Simple pause ratio (frames with very low energy)
+    energy_threshold = 0.01 * np.max(rms) if np.max(rms) > 0 else 0.0
+    pause_ratio = np.mean(rms < energy_threshold)
 
-    # Voiced / unvoiced ratio
-    voiced_ratio = np.sum(voiced_flag) / len(voiced_flag) if len(voiced_flag) else 0
-
-    # Delta features
+    # Delta features (keep similar)
     f0_delta = np.diff(f0_voiced) if len(f0_voiced) > 1 else np.array([0.0])
     rms_delta = np.diff(rms) if len(rms) > 1 else np.array([0.0])
     delta_feats = {
-        "f0_delta_mean":  np.mean(f0_delta),
-        "f0_delta_std":   np.std(f0_delta),
+        "f0_delta_mean": np.mean(f0_delta),
+        "f0_delta_std": np.std(f0_delta),
         "rms_delta_mean": np.mean(rms_delta),
-        "rms_delta_std":  np.std(rms_delta),
+        "rms_delta_std": np.std(rms_delta),
     }
 
-    # MFCCs (13 coefficients → mean & std)
+    # MFCCs + deltas (unchanged - keep your existing code block)
     mfccs = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
     mfcc_feats = {}
     for i in range(13):
         mfcc_feats[f"mfcc{i}_mean"] = np.mean(mfccs[i])
-        mfcc_feats[f"mfcc{i}_std"]  = np.std(mfccs[i])
+        mfcc_feats[f"mfcc{i}_std"] = np.std(mfccs[i])
 
-    # NEW — MFCC deltas (temporal evolution of MFCCs)
     mfcc_deltas = librosa.feature.delta(mfccs)
     mfcc_delta_feats = {}
     for i in range(13):
         mfcc_delta_feats[f"mfcc{i}_delta_mean"] = np.mean(mfcc_deltas[i])
-        mfcc_delta_feats[f"mfcc{i}_delta_std"]  = np.std(mfcc_deltas[i])
+        mfcc_delta_feats[f"mfcc{i}_delta_std"] = np.std(mfcc_deltas[i])
 
-    # Spectral shape features
+    # Spectral features (keep your existing)
     centroid = librosa.feature.spectral_centroid(y=y, sr=sr)[0]
     bandwidth = librosa.feature.spectral_bandwidth(y=y, sr=sr)[0]
     rolloff = librosa.feature.spectral_rolloff(y=y, sr=sr)[0]
     flatness = librosa.feature.spectral_flatness(y=y)[0]
     spectral_feats = {
-        "spectral_centroid_mean":   np.mean(centroid),
-        "spectral_centroid_std":    np.std(centroid),
-        "spectral_bandwidth_mean":  np.mean(bandwidth),
-        "spectral_bandwidth_std":   np.std(bandwidth),
-        "spectral_rolloff_mean":    np.mean(rolloff),
-        "spectral_rolloff_std":     np.std(rolloff),
-        "spectral_flatness_mean":   np.mean(flatness),
-        "spectral_flatness_std":    np.std(flatness),
+        "spectral_centroid_mean": np.mean(centroid),
+        "spectral_centroid_std": np.std(centroid),
+        "spectral_bandwidth_mean": np.mean(bandwidth),
+        "spectral_bandwidth_std": np.std(bandwidth),
+        "spectral_rolloff_mean": np.mean(rolloff),
+        "spectral_rolloff_std": np.std(rolloff),
+        "spectral_flatness_mean": np.mean(flatness),
+        "spectral_flatness_std": np.std(flatness),
     }
 
-    # NEW — Spectral flux (how fast spectrum changes frame to frame)
     stft = np.abs(librosa.stft(y))
     spectral_flux = np.sqrt(np.sum(np.diff(stft, axis=1) ** 2, axis=0))
     spectral_flux_feats = {
         "spectral_flux_mean": np.mean(spectral_flux),
-        "spectral_flux_std":  np.std(spectral_flux),
+        "spectral_flux_std": np.std(spectral_flux),
     }
 
-    # NEW — Voice quality features (jitter, shimmer, HNR)
-    # Jitter — cycle-to-cycle pitch period variation
-    if len(f0_voiced) > 1:
-        periods = 1.0 / (f0_voiced + 1e-8)
-        period_diffs = np.abs(np.diff(periods))
-        jitter = np.mean(period_diffs) / (np.mean(periods) + 1e-8)
-    else:
-        jitter = 0.0
+    # === Voice Quality + Formants with Parselmouth (biggest improvement) ===
+    sound = parselmouth.Sound(y, sr)
+    try:
+        point_process = parselmouth.praat.call(sound, "To PointProcess (periodic, cc)", 75, 600)
+        jitter = parselmouth.praat.call(point_process, "Get jitter (local)", 0, 0, 0.0001, 0.02, 1.3)
+        shimmer = parselmouth.praat.call([sound, point_process], "Get shimmer (local)", 0, 0, 0.0001, 0.02, 1.3, 1.6)
+        
+        harmonicity = sound.to_harmonicity()
+        hnr = parselmouth.praat.call(harmonicity, "Get mean", 0, 0) if harmonicity else 0.0
+    except Exception:
+        jitter, shimmer, hnr = 0.0, 0.0, 0.0
 
-    # Shimmer — cycle-to-cycle amplitude variation
-    if len(rms) > 1:
-        rms_diffs = np.abs(np.diff(rms))
-        shimmer = np.mean(rms_diffs) / (np.mean(rms) + 1e-8)
-    else:
-        shimmer = 0.0
-
-    # HNR — Harmonics to Noise Ratio
-    if len(f0_voiced) > 0:
-        try:
-            # Use autocorrelation-based HNR estimation
-            frame_length = 2048
-            hop = 512
-            frames = librosa.util.frame(y, frame_length=frame_length, hop_length=hop)
-            hnr_values = []
-            for frame in frames.T:
-                ac_frame = np.correlate(frame, frame, mode='full')
-                ac_frame = ac_frame[len(ac_frame) // 2:]
-                ac_frame = ac_frame / (ac_frame[0] + 1e-8)
-                peak = np.max(ac_frame[1:]) if len(ac_frame) > 1 else 0
-                peak = np.clip(peak, 0, 1 - 1e-8)
-                hnr = 10 * np.log10(peak / (1 - peak + 1e-8))
-                hnr_values.append(hnr)
-            hnr = np.mean(hnr_values)
-        except Exception:
-            hnr = 0.0
-    else:
-        hnr = 0.0
+    # Formants (Burg method - very useful for spoof detection)
+    try:
+        formant = parselmouth.praat.call(sound, "To Formant (burg)", 0.0, 5, 5500, 0.025, 50)
+        f1_mean = parselmouth.praat.call(formant, "Get mean", 1, 0, 0)
+        f1_std = parselmouth.praat.call(formant, "Get standard deviation", 1, 0, 0)
+        f2_mean = parselmouth.praat.call(formant, "Get mean", 2, 0, 0)
+        f2_std = parselmouth.praat.call(formant, "Get standard deviation", 2, 0, 0)
+        f3_mean = parselmouth.praat.call(formant, "Get mean", 3, 0, 0)
+        f3_std = parselmouth.praat.call(formant, "Get standard deviation", 3, 0, 0)
+    except Exception:
+        f1_mean = f1_std = f2_mean = f2_std = f3_mean = f3_std = 0.0
 
     voice_quality_feats = {
-        "jitter":                   jitter,
-        "shimmer":                  shimmer,
+        "jitter": jitter,
+        "shimmer": shimmer,
         "harmonics_to_noise_ratio": hnr,
+        "f1_mean": f1_mean, "f1_std": f1_std,
+        "f2_mean": f2_mean, "f2_std": f2_std,
+        "f3_mean": f3_mean, "f3_std": f3_std,
     }
 
-    # NEW — Chroma features (harmonic structure)
+    # Chroma (unchanged)
     chroma = librosa.feature.chroma_stft(y=y, sr=sr)
     chroma_feats = {
         "chroma_mean": np.mean(chroma),
-        "chroma_std":  np.std(chroma),
+        "chroma_std": np.std(chroma),
     }
 
-    return {
+    # Combine all
+    features = {
         **pitch_feats,
         **energy_feats,
-        **rate_feats,
         "tempo": tempo,
         "voiced_ratio": voiced_ratio,
+        "pause_ratio": pause_ratio,
         **delta_feats,
         **mfcc_feats,
-        **mfcc_delta_feats,      
+        **mfcc_delta_feats,
         **spectral_feats,
-        **spectral_flux_feats,    
-        **voice_quality_feats,    
-        **chroma_feats,           
+        **spectral_flux_feats,
+        **voice_quality_feats,
+        **chroma_feats,
     }
+
+    # Safe NaN handling
+    for k in features:
+        if np.isnan(features[k]) or np.isinf(features[k]):
+            features[k] = 0.0
+
+    return features
+
+
+# ===[[ wavlm-based Input Transformations ]]===
+
+TARGET_SR = 16000
+
+class WaveFormExtract(Dataset):
+    def __init__(self, metadata_df, audio_root: str):
+        self.df = metadata_df.reset_index(drop=True)
+        self.audio_root = audio_root
+        self.label_map = {"bonafide": 0, "spoof": 1}
+
+    def __len__(self):
+        return len(self.df)
+
+    def __getitem__(self, idx):
+        row = self.df.iloc[idx]
+        audio_path = f"{self.audio_root}/{row['FULL_FILE_PATH']}"  # Adjust column if needed
+
+        waveform, sr = torchaudio.load(audio_path)
+        if sr != TARGET_SR:
+            waveform = torchaudio.functional.resample(waveform, sr, TARGET_SR)
+
+        if waveform.shape[0] > 1:  # stereo -> mono
+            waveform = waveform.mean(dim=0, keepdim=True)
+
+        # Fixed length: truncate or pad
+        max_samples = int(MAX_DURATION * TARGET_SR)
+        if waveform.shape[1] > max_samples:
+            waveform = waveform[:, :max_samples]
+        else:
+            pad = max_samples - waveform.shape[1]
+            waveform = torch.nn.functional.pad(waveform, (0, pad))
+
+        label = self.label_map.get(row['LABEL'], 1)  # default spoof
+        return waveform.squeeze(0), torch.tensor(label, dtype=torch.long)  # [time], label
+

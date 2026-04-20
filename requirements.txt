@@ -6,7 +6,9 @@ torch
 joblib
 tqdm
 tqdm-joblib
-
+scipy
+praat-parselmouth
+transformers
 scikit-learn
 torch
 torchaudio

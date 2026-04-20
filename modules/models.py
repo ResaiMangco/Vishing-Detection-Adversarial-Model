@@ -154,3 +154,41 @@ class ProsodyMLP(nn.Module):
         h = first_block(x) + self.residual_proj(x)
         h = rest(h)
         return self.head(h)
+    
+
+
+
+# ===[[ wavlm-based Model ]]===
+class WavLM_SpoofDetector(nn.Module):
+    def __init__(self, num_classes=2, freeze_wavlm=False):
+        super().__init__()
+        self.wavlm = WavLMModel.from_pretrained("microsoft/wavlm-base")
+        
+        if freeze_wavlm:
+            for param in self.wavlm.parameters():
+                param.requires_grad = False
+                
+        hidden_dim = self.wavlm.config.hidden_size  # 768 for base
+        
+        self.classifier = nn.Sequential(
+            nn.Linear(hidden_dim, 512),
+            nn.BatchNorm1d(512),
+            nn.GELU(),
+            nn.Dropout(0.3),
+            nn.Linear(512, 256),
+            nn.BatchNorm1d(256),
+            nn.GELU(),
+            nn.Dropout(0.3),
+            nn.Linear(256, num_classes)
+        )
+
+    def forward(self, waveform):
+        # waveform: [batch, time] at 16kHz
+        outputs = self.wavlm(input_values=waveform)
+        hidden_states = outputs.last_hidden_state  # [batch, seq_len, 768]
+        
+        # Mean pooling (simple & effective)
+        pooled = hidden_states.mean(dim=1)  # [batch, 768]
+        
+        logits = self.classifier(pooled)
+        return logits
