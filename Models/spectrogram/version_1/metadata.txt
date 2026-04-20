@@ -1,0 +1,31 @@
+train (18801, 13) {1: 15000, 0: 3801}
+dev (18196, 13) {1: 9098, 0: 9098}
+eval (16676, 13) {0: 8338, 1: 8338}
+
+'epoch': 1, 'train_loss': 0.40651, 'dev_loss': 1.00843, 'lr': 0.001
+'epoch': 2, 'train_loss': 0.36555, 'dev_loss': 0.89983, 'lr': 0.001
+'epoch': 3, 'train_loss': 0.35191, 'dev_loss': 0.71692, 'lr': 0.001
+'epoch': 4, 'train_loss': 0.34601, 'dev_loss': 1.06821, 'lr': 0.001
+'epoch': 5, 'train_loss': 0.34034, 'dev_loss': 0.51999, 'lr': 0.001
+'epoch': 6, 'train_loss': 0.33589, 'dev_loss': 0.64137, 'lr': 0.001
+'epoch': 7, 'train_loss': 0.33573, 'dev_loss': 0.81402, 'lr': 0.001
+'epoch': 8, 'train_loss': 0.3376, 'dev_loss': 0.73663, 'lr': 0.001
+'epoch': 9, 'train_loss': 0.33257, 'dev_loss': 0.49301, 'lr': 0.001
+'epoch': 10, 'train_loss': 0.32685, 'dev_loss': 0.77034, 'lr': 0.001
+'epoch': 11, 'train_loss': 0.32772, 'dev_loss': 0.59948, 'lr': 0.001
+'epoch': 12, 'train_loss': 0.3282, 'dev_loss': 0.58959, 'lr': 0.001
+'epoch': 13, 'train_loss': 0.32276, 'dev_loss': 0.67646, 'lr': 0.001
+'epoch': 14, 'train_loss': 0.32551, 'dev_loss': 0.55801, 'lr': 0.001
+'epoch': 15, 'train_loss': 0.32407, 'dev_loss': 0.5245, 'lr': 0.0005
+'epoch': 16, 'train_loss': 0.31615, 'dev_loss': 0.57456, 'lr': 0.0005
+'epoch': 17, 'train_loss': 0.31676, 'dev_loss': 0.4543, 'lr': 0.0005
+'epoch': 18, 'train_loss': 0.31732, 'dev_loss': 0.74294, 'lr': 0.0005
+'epoch': 19, 'train_loss': 0.31453, 'dev_loss': 0.47709, 'lr': 0.0005
+'epoch': 20, 'train_loss': 0.31782, 'dev_loss': 0.64451, 'lr': 0.0005
+
+{'num_samples': 16676}
+
+Clean Accuracy: 0.5700
+Adversarial Accuracy: 0.4995
+MACD: 0.072297
+ASR: 7.4538%

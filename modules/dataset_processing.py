@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
 from pathlib import Path
 import tarfile
@@ -150,12 +151,16 @@ def resolve_layout(data_root: str | Path) -> DataLayout:
         eval_audio_root=root / SPLIT_TO_AUDIO_DIR["eval"],
     )
 
-def extract_archives(data_root: str | Path, max_items: Optional[int] = None) -> None:
+def extract_archives(data_root: str | Path, max_items: Optional[int] = None, balanced: bool = False) -> None:
     """
         Extracts dataset archives, optionally limiting extracted audio items.
 
         When ``max_items`` is provided, extraction of split audio archives stops after
         that many archive members have been extracted in total.
+
+        When ``balanced`` is True and ``max_items`` is set, extraction uses the
+        protocol TSV to identify bonafide vs spoof files and extracts up to
+        ``max_items // 2`` of each class so the on-disk split is class-balanced.
     """
     layout = resolve_layout(data_root)
 
@@ -177,23 +182,64 @@ def extract_archives(data_root: str | Path, max_items: Optional[int] = None) -> 
             print(f"No archive paths found for split {split}")
             continue
 
-        remaining_items = max_items
-        for archive_path in archive_paths:
-            if remaining_items is not None and remaining_items <= 0:
-                break
+        if balanced and max_items is not None:
+            protocol_df = load_asvspoof_tsv(get_protocol_path(data_root=layout.data_root, split=split))
+            label_source = "KEY" if "KEY" in protocol_df.columns else "ATTACK_LABEL"
+            bonafide_stems = set(
+                protocol_df.loc[
+                    protocol_df[label_source].str.strip().str.lower() == "bonafide",
+                    "FLAC_FILE_NAME",
+                ]
+            )
 
-            with tarfile.open(archive_path, mode="r") as archive_handle:
-                if remaining_items is None:
-                    archive_handle.extractall(path=layout.data_root)
-                    continue
+            per_class_limit = max_items // 2
+            bonafide_remaining = per_class_limit
+            spoof_remaining = per_class_limit
 
-                members = archive_handle.getmembers()
-                selected_members = members[:remaining_items]
-                if not selected_members:
-                    continue
+            for archive_path in archive_paths:
+                if bonafide_remaining <= 0 and spoof_remaining <= 0:
+                    break
 
-                archive_handle.extractall(path=layout.data_root, members=selected_members)
-                remaining_items -= len(selected_members)
+                with tarfile.open(archive_path, mode="r") as archive_handle:
+                    members = archive_handle.getmembers()
+                    random.shuffle(members)
+                    selected = []
+                    for m in members:
+                        if not m.isfile():
+                            selected.append(m)
+                            continue
+                        stem = Path(m.name).stem
+                        if stem in bonafide_stems:
+                            if bonafide_remaining > 0:
+                                selected.append(m)
+                                bonafide_remaining -= 1
+                        else:
+                            if spoof_remaining > 0:
+                                selected.append(m)
+                                spoof_remaining -= 1
+                        if bonafide_remaining <= 0 and spoof_remaining <= 0:
+                            break
+                    if selected:
+                        archive_handle.extractall(path=layout.data_root, members=selected)
+        else:
+            remaining_items = max_items
+            for archive_path in archive_paths:
+                if remaining_items is not None and remaining_items <= 0:
+                    break
+
+                with tarfile.open(archive_path, mode="r") as archive_handle:
+                    if remaining_items is None:
+                        archive_handle.extractall(path=layout.data_root)
+                        continue
+
+                    members = archive_handle.getmembers()
+                    random.shuffle(members)
+                    selected_members = members[:remaining_items]
+                    if not selected_members:
+                        continue
+
+                    archive_handle.extractall(path=layout.data_root, members=selected_members)
+                    remaining_items -= len(selected_members)
 
 def load_asvspoof_tsv(tsv_path: str | Path) -> pd.DataFrame:
     """Loads a protocol TSV file into a DataFrame."""
@@ -290,25 +336,26 @@ def subsample_by_class(
     bonafide_samples: Optional[int] = None,
     spoof_samples: Optional[int] = None,
     random_seed: int = 67,
+    balanced: bool = False,
 ) -> pd.DataFrame:
-    """Subsamples a DataFrame to have a specific number of bonafide and spoof samples, while maintaining class balance."""
+    """Subsamples a DataFrame to have a specific number of bonafide and spoof samples.
+
+    When balanced=True, both classes are capped to the size of the smaller
+    class after initial subsampling so that they are equal in count.
+    """
     bonafide_df = dataframe[dataframe["LABEL"] == 0]
     spoof_df = dataframe[dataframe["LABEL"] == 1]
 
-    sampled_frames = []
-    if bonafide_samples is None:
-        sampled_frames.append(bonafide_df)
-    else:
-        sampled_frames.append(
-            bonafide_df.sample(n=min(bonafide_samples, len(bonafide_df)), random_state=random_seed)
-        )
+    n_bonafide = min(bonafide_samples, len(bonafide_df)) if bonafide_samples is not None else len(bonafide_df)
+    n_spoof = min(spoof_samples, len(spoof_df)) if spoof_samples is not None else len(spoof_df)
 
-    if spoof_samples is None:
-        sampled_frames.append(spoof_df)
-    else:
-        sampled_frames.append(
-            spoof_df.sample(n=min(spoof_samples, len(spoof_df)), random_state=random_seed)
-        )
+    if balanced:
+        n_bonafide = n_spoof = min(n_bonafide, n_spoof)
+
+    sampled_frames = [
+        bonafide_df.sample(n=n_bonafide, random_state=random_seed),
+        spoof_df.sample(n=n_spoof, random_state=random_seed),
+    ]
 
     return (
         pd.concat(sampled_frames, axis=0)

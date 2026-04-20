@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import torch
+import torchaudio
 
 from dataclasses import dataclass
 
 from typing import Optional
 from torch import nn
-from modules.audio_processing import LogMelSpectrogramConfig, WaveformToLogMelSpectrogram
+from modules.audio_processing import LogMelSpectrogramConfig, SpecAugmentConfig, WaveformToLogMelSpectrogram
 
 
 # ===[[ Spectrogram-based Model ]]===
@@ -48,7 +49,7 @@ class SpectrogramCNN(nn.Module):
         self.feature_extractor = nn.Sequential(
             ConvBlock(1, channels),
             ConvBlock(channels, channels * 2),
-            ConvBlock(channels * 2, channels * 4),
+            ConvBlock(channels * 2, channels * 4)
         )
         self.pool = nn.AdaptiveAvgPool2d((1, 1))
         self.classifier = nn.Sequential(
@@ -71,14 +72,28 @@ class SpectrogramClassifier(nn.Module):
         self,
         transformer_config: Optional[LogMelSpectrogramConfig] = None,
         model_config: Optional[SpectrogramCNNConfig] = None,
+        spec_augment_config: Optional[SpecAugmentConfig] = None,
     ) -> None:
         super().__init__()
 
         self.transformer = WaveformToLogMelSpectrogram(transformer_config)
         self.classifier = SpectrogramCNN(model_config)
 
+        aug = spec_augment_config or SpecAugmentConfig()
+        self.freq_masks = nn.ModuleList(
+            [torchaudio.transforms.FrequencyMasking(freq_mask_param=aug.freq_mask_param) for _ in range(aug.num_freq_masks)]
+        )
+        self.time_masks = nn.ModuleList(
+            [torchaudio.transforms.TimeMasking(time_mask_param=aug.time_mask_param) for _ in range(aug.num_time_masks)]
+        )
+
     def forward(self, waveforms: torch.Tensor) -> torch.Tensor:
         spectrograms = self.transformer(waveforms)
+        if self.training:
+            for mask in self.freq_masks:
+                spectrograms = mask(spectrograms)
+            for mask in self.time_masks:
+                spectrograms = mask(spectrograms)
         return self.classifier(spectrograms)
 
     @torch.no_grad()

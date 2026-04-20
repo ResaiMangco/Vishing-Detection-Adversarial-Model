@@ -24,6 +24,14 @@ class LogMelSpectrogramConfig:
     normalize: bool = True
 
 
+@dataclass(frozen=True)
+class SpecAugmentConfig:
+    freq_mask_param: int = 10
+    time_mask_param: int = 20
+    num_freq_masks: int = 2
+    num_time_masks: int = 2
+
+
 class WaveformToLogMelSpectrogram(nn.Module):
     def __init__(self, config: Optional[LogMelSpectrogramConfig] = None) -> None:
         """Initializes the waveform to log-mel transformation module"""

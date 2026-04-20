@@ -8,6 +8,5 @@ tqdm
 tqdm-joblib
 
 scikit-learn
-torch
 torchaudio
 soundfile
