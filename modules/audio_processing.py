@@ -71,7 +71,18 @@ class WaveformToLogMelSpectrogram(nn.Module):
         # Add a channel (dimension) for CNN input compatibility 
         return log_mel_spectrogram.unsqueeze(1)
 
+class SpecAugment(nn.Module):
+    def __init__(self, freq_mask_param: int = 15, time_mask_param: int = 35, num_masks: int = 2):
+        super().__init__()
+        self.freq_masking = torchaudio.transforms.FrequencyMasking(freq_mask_param)
+        self.time_masking = torchaudio.transforms.TimeMasking(time_mask_param)
+        self.num_masks = num_masks
 
+    def forward(self, spectrogram: torch.Tensor) -> torch.Tensor:
+        for _ in range(self.num_masks):
+            spectrogram = self.freq_masking(spectrogram)
+            spectrogram = self.time_masking(spectrogram)
+        return spectrogram
 # ===[[ Prosodic-based Input Transformations ]]===
 
 import librosa
@@ -188,7 +199,9 @@ def extract_prosodic_features(
         mfcc_feats[f"mfcc{i}_mean"] = np.mean(mfccs[i])
         mfcc_feats[f"mfcc{i}_std"] = np.std(mfccs[i])
 
-    mfcc_deltas = librosa.feature.delta(mfccs)
+    delta_width = min(9, mfccs.shape[1] if mfccs.shape[1] % 2 == 1 else mfccs.shape[1] - 1)
+    delta_width = max(3, delta_width)  # minimum width is 3
+    mfcc_deltas = librosa.feature.delta(mfccs, width=delta_width)
     mfcc_delta_feats = {}
     for i in range(13):
         mfcc_delta_feats[f"mfcc{i}_delta_mean"] = np.mean(mfcc_deltas[i])
@@ -282,9 +295,9 @@ def extract_prosodic_features(
 
 
 # ===[[ wavlm-based Input Transformations ]]===
-
+from torch.utils.data import Dataset
 TARGET_SR = 16000
-
+MAX_DURATION = 6.0
 class WaveFormExtract(Dataset):
     def __init__(self, metadata_df, audio_root: str):
         self.df = metadata_df.reset_index(drop=True)

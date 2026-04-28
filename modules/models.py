@@ -6,8 +6,8 @@ from dataclasses import dataclass
 
 from typing import Optional
 from torch import nn
-from modules.audio_processing import LogMelSpectrogramConfig, WaveformToLogMelSpectrogram
-
+from modules.audio_processing import LogMelSpectrogramConfig, WaveformToLogMelSpectrogram, SpecAugment
+import torchaudio
 
 # ===[[ Spectrogram-based Model ]]===
 
@@ -48,7 +48,7 @@ class SpectrogramCNN(nn.Module):
             ConvBlock(1, channels),           # Input will be 1 channel for now
             ConvBlock(channels, channels * 2),
             ConvBlock(channels * 2, channels * 4),
-            ConvBlock(channels * 4, channels * 8),   # <-- Added extra block
+            ConvBlock(channels * 4, channels * 8),   # extra
         )
         self.pool = nn.AdaptiveAvgPool2d((1, 1))
         self.classifier = nn.Sequential(
@@ -65,31 +65,26 @@ class SpectrogramCNN(nn.Module):
         return self.classifier(pooled_features)
 
 
+
 class SpectrogramClassifier(nn.Module):
-    """Spectrogram-based Model with raw waveform transformer and CNN architecture"""
     def __init__(
         self,
-        transformer_config: Optional[LogMelSpectrogramConfig] = None,
-        model_config: Optional[SpectrogramCNNConfig] = None,
+        transformer_config=None,
+        model_config=None,
+        use_spec_augment: bool = True,
+        freq_mask_param: int = 15,
+        time_mask_param: int = 35,
     ) -> None:
         super().__init__()
-
         self.transformer = WaveformToLogMelSpectrogram(transformer_config)
+        self.spec_augment = SpecAugment(freq_mask_param, time_mask_param) if use_spec_augment else None
         self.classifier = SpectrogramCNN(model_config)
 
     def forward(self, waveforms: torch.Tensor) -> torch.Tensor:
         spectrograms = self.transformer(waveforms)
+        if self.training and self.spec_augment is not None:
+            spectrograms = self.spec_augment(spectrograms)
         return self.classifier(spectrograms)
-
-    @torch.no_grad()
-    def predict_proba(self, waveforms: torch.Tensor) -> torch.Tensor:
-        logits = self.forward(waveforms)
-        return torch.softmax(logits, dim=-1)
-
-    @torch.no_grad()
-    def predict(self, waveforms: torch.Tensor) -> torch.Tensor:
-        probabilities = self.predict_proba(waveforms)
-        return probabilities.argmax(dim=-1)
 
 
 # ===[[ Prosodic-based Model ]]===
