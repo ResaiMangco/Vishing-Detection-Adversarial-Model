@@ -31,9 +31,17 @@ class ConvBlock(nn.Module):
             nn.ReLU(inplace=True),
             nn.MaxPool2d(kernel_size=2, stride=2),
         )
+        # Skip connection to match channels when they differ
+        self.skip = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.AvgPool2d(kernel_size=2, stride=2),
+        ) if in_channels != out_channels else nn.Sequential(
+            nn.AvgPool2d(kernel_size=2, stride=2)
+        )
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        return self.layers(inputs)
+        return self.layers(inputs) + self.skip(inputs)
 
 class SpectrogramCNN(nn.Module):
     """CNN architecture for Spectrogram-based Model - Improved"""
