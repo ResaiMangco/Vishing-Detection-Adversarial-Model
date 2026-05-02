@@ -174,7 +174,10 @@ def extract_prosodic_features(
 
     # Tempo (more reliable)
     tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
-    tempo = float(tempo) if np.isscalar(tempo) else float(tempo[0]) if len(tempo) > 0 else 0.0
+    try:
+        tempo = float(tempo) if np.ndim(tempo) == 0 else float(tempo[0]) if len(tempo) > 0 else 0.0
+    except (TypeError, IndexError):
+        tempo = 0.0
 
     # Voiced / Pause ratio
     voiced_ratio = np.mean(voiced_flag) if len(voiced_flag) else 0.0
@@ -199,13 +202,17 @@ def extract_prosodic_features(
         mfcc_feats[f"mfcc{i}_mean"] = np.mean(mfccs[i])
         mfcc_feats[f"mfcc{i}_std"] = np.std(mfccs[i])
 
-    delta_width = min(9, mfccs.shape[1] if mfccs.shape[1] % 2 == 1 else mfccs.shape[1] - 1)
-    delta_width = max(3, delta_width)  # minimum width is 3
-    mfcc_deltas = librosa.feature.delta(mfccs, width=delta_width)
-    mfcc_delta_feats = {}
-    for i in range(13):
-        mfcc_delta_feats[f"mfcc{i}_delta_mean"] = np.mean(mfcc_deltas[i])
-        mfcc_delta_feats[f"mfcc{i}_delta_std"] = np.std(mfcc_deltas[i])
+    if mfccs.shape[1] < 3:
+        mfcc_delta_feats = {f"mfcc{i}_delta_mean": 0.0 for i in range(13)}
+        mfcc_delta_feats.update({f"mfcc{i}_delta_std": 0.0 for i in range(13)})
+    else:
+        delta_width = min(9, mfccs.shape[1] if mfccs.shape[1] % 2 == 1 else mfccs.shape[1] - 1)
+        delta_width = max(3, delta_width)
+        mfcc_deltas = librosa.feature.delta(mfccs, width=delta_width)
+        mfcc_delta_feats = {}
+        for i in range(13):
+            mfcc_delta_feats[f"mfcc{i}_delta_mean"] = np.mean(mfcc_deltas[i])
+            mfcc_delta_feats[f"mfcc{i}_delta_std"] = np.std(mfcc_deltas[i])
 
     # Spectral features (keep your existing)
     centroid = librosa.feature.spectral_centroid(y=y, sr=sr)[0]
@@ -292,40 +299,4 @@ def extract_prosodic_features(
             features[k] = 0.0
 
     return features
-
-
-# ===[[ wavlm-based Input Transformations ]]===
-from torch.utils.data import Dataset
-TARGET_SR = 16000
-MAX_DURATION = 6.0
-class WaveFormExtract(Dataset):
-    def __init__(self, metadata_df, audio_root: str):
-        self.df = metadata_df.reset_index(drop=True)
-        self.audio_root = audio_root
-        self.label_map = {"bonafide": 0, "spoof": 1}
-
-    def __len__(self):
-        return len(self.df)
-
-    def __getitem__(self, idx):
-        row = self.df.iloc[idx]
-        audio_path = f"{self.audio_root}/{row['FULL_FILE_PATH']}"  # Adjust column if needed
-
-        waveform, sr = torchaudio.load(audio_path)
-        if sr != TARGET_SR:
-            waveform = torchaudio.functional.resample(waveform, sr, TARGET_SR)
-
-        if waveform.shape[0] > 1:  # stereo -> mono
-            waveform = waveform.mean(dim=0, keepdim=True)
-
-        # Fixed length: truncate or pad
-        max_samples = int(MAX_DURATION * TARGET_SR)
-        if waveform.shape[1] > max_samples:
-            waveform = waveform[:, :max_samples]
-        else:
-            pad = max_samples - waveform.shape[1]
-            waveform = torch.nn.functional.pad(waveform, (0, pad))
-
-        label = self.label_map.get(row['LABEL'], 1)  # default spoof
-        return waveform.squeeze(0), torch.tensor(label, dtype=torch.long)  # [time], label
 

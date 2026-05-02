@@ -99,11 +99,11 @@ class SpectrogramClassifier(nn.Module):
 
 @dataclass(frozen=True)
 class ProsodyMLPConfig:
-    input_dim: int = 85
-    num_classes: int = 2
-    hidden_dims: tuple = (512, 256, 128, 64)
-    dropout: float = 0.4
-    noise_std: float = 0.2
+    input_dim: int = 93
+    num_classes: int = 9
+    hidden_dims: tuple = (256, 128, 64)
+    dropout: float = 0.5
+    noise_std: float = 0.05
     use_attention: bool = True 
 
 
