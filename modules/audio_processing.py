@@ -174,7 +174,7 @@ def extract_prosodic_features(
 
     # Tempo (more reliable)
     tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
-    tempo = float(tempo[0]) if len(tempo) > 0 else 0.0
+    tempo = float(tempo) if np.isscalar(tempo) else float(tempo[0]) if len(tempo) > 0 else 0.0
 
     # Voiced / Pause ratio
     voiced_ratio = np.mean(voiced_flag) if len(voiced_flag) else 0.0

@@ -233,6 +233,15 @@ def build_full_file_path(file_name: str, split: str, data_root: str | Path) -> s
 
     return str(get_audio_root(data_root, split) / f"{file_name}.flac")
 
+ATTACK_LABEL_TO_INT = {
+    "bonafide": 0,
+    "a01": 1, "a02": 2, "a03": 3, "a04": 4,
+    "a05": 5, "a06": 6, "a07": 7, "a08": 8,
+}
+
+def map_multiclass_label(label_value: str) -> int:
+    return ATTACK_LABEL_TO_INT.get(str(label_value).strip().lower(), 1)  # unknown → spoof
+
 def map_binary_label(label_value: str) -> int:
     """Maps the original ASVspoof 5 label value to a binary label (0 for bonafide, 1 for spoof)."""
     label_value = str(label_value).strip().lower()
@@ -251,7 +260,8 @@ def add_full_file_paths(
     )
 
     label_source = "KEY" if "KEY" in output.columns else "ATTACK_LABEL"
-    output["LABEL"] = output[label_source].apply(map_binary_label).astype(int)
+    # output["LABEL"] = output[label_source].apply(map_binary_label).astype(int)
+    output["LABEL"] = output["ATTACK_LABEL"].apply(map_multiclass_label).astype(int)
     return output
 
 def filter_existing_files(dataframe: pd.DataFrame) -> pd.DataFrame:
