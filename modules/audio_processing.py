@@ -91,21 +91,17 @@ import numpy as np
 PROSODIC_FEATURE_COLUMNS = [
     # Pitch
     "f0_mean", "f0_std", "f0_range", "f0_slope",
-    "f0_skew", "f0_kurtosis", "f0_q25", "f0_q75",
+    "f0_q25", "f0_q75", "f0_continuity",
     # Energy
     "rms_mean", "rms_std", "rms_max",
-    "rms_skew", "rms_kurtosis",
     # Rhythm
-    "tempo", "voiced_ratio", "pause_ratio",
+    "voiced_ratio", "pause_ratio",
     # Delta
     "f0_delta_mean", "f0_delta_std",
     "rms_delta_mean", "rms_delta_std",
     # MFCCs
     *[f"mfcc{i}_mean" for i in range(13)],
     *[f"mfcc{i}_std" for i in range(13)],
-    # MFCC deltas
-    *[f"mfcc{i}_delta_mean" for i in range(13)],
-    *[f"mfcc{i}_delta_std" for i in range(13)],
     # Spectral shape
     "spectral_centroid_mean", "spectral_centroid_std",
     "spectral_bandwidth_mean", "spectral_bandwidth_std",
@@ -113,190 +109,191 @@ PROSODIC_FEATURE_COLUMNS = [
     "spectral_flatness_mean", "spectral_flatness_std",
     # Spectral flux
     "spectral_flux_mean", "spectral_flux_std",
+    # Spectral entropy
+    "spectral_entropy_mean", "spectral_entropy_std",
+    # Zero crossing rate
+    "zcr_mean", "zcr_std",
     # Voice quality
-    "jitter", "shimmer", "harmonics_to_noise_ratio",
+    "jitter", "shimmer", "harmonics_to_noise_ratio", "cpps",
+    # Formants
     "f1_mean", "f1_std",
     "f2_mean", "f2_std",
     "f3_mean", "f3_std",
-    # Chroma
-    "chroma_mean", "chroma_std",
 ]
 
 # Update your config class if needed (no change required)
-
 @dataclass(frozen=True)
 class ProsodicFeatureConfig:
     sr: Optional[int] = None
     fmin: float = librosa.note_to_hz('C2')
     fmax: float = librosa.note_to_hz('C7')
 
+
 import parselmouth
 import numpy as np
 import librosa
 from scipy.stats import skew, kurtosis
 
+
+def spectral_entropy(stft_mag):
+    power = stft_mag ** 2
+    power_norm = power / (power.sum(axis=0, keepdims=True) + 1e-8)
+    entropy = -np.sum(power_norm * np.log(power_norm + 1e-8), axis=0)
+    return entropy
+
+
 def extract_prosodic_features(
     file_path: str,
     config: Optional[ProsodicFeatureConfig] = None,
 ) -> dict:
-    """Improved prosodic feature extraction for ASVspoof5 / Vishing detection."""
     config = config or ProsodicFeatureConfig()
     y, sr = librosa.load(file_path, sr=config.sr)
 
-    # === Better Pitch with pyin ===
-    f0, voiced_flag, voiced_prob = librosa.pyin(
+    # Pitch
+    f0, voiced_flag, _ = librosa.pyin(
         y, fmin=config.fmin, fmax=config.fmax, sr=sr, fill_na=0.0
     )
     voiced_flag = voiced_flag.astype(bool)
     f0_voiced = f0[voiced_flag]
 
-    # Pitch stats
     pitch_feats = {
-        "f0_mean": np.nanmean(f0_voiced) if len(f0_voiced) else 0.0,
-        "f0_std": np.nanstd(f0_voiced) if len(f0_voiced) else 0.0,
-        "f0_range": np.nanmax(f0_voiced) - np.nanmin(f0_voiced) if len(f0_voiced) else 0.0,
-        "f0_slope": np.polyfit(np.arange(len(f0_voiced)), f0_voiced, 1)[0] if len(f0_voiced) > 1 else 0.0,
-        "f0_skew": skew(f0_voiced) if len(f0_voiced) > 2 else 0.0,
-        "f0_kurtosis": kurtosis(f0_voiced) if len(f0_voiced) > 2 else 0.0,
-        "f0_q25": np.nanquantile(f0_voiced, 0.25) if len(f0_voiced) else 0.0,
-        "f0_q75": np.nanquantile(f0_voiced, 0.75) if len(f0_voiced) else 0.0,
+        "f0_mean":       np.nanmean(f0_voiced) if len(f0_voiced) else 0.0,
+        "f0_std":        np.nanstd(f0_voiced)  if len(f0_voiced) else 0.0,
+        "f0_range":      np.nanmax(f0_voiced) - np.nanmin(f0_voiced) if len(f0_voiced) else 0.0,
+        "f0_slope":      np.polyfit(np.arange(len(f0_voiced)), f0_voiced, 1)[0] if len(f0_voiced) > 1 else 0.0,
+        "f0_q25":        np.nanquantile(f0_voiced, 0.25) if len(f0_voiced) else 0.0,
+        "f0_q75":        np.nanquantile(f0_voiced, 0.75) if len(f0_voiced) else 0.0,
+        "f0_continuity": np.mean(np.diff(voiced_flag.astype(int)) != 0) if len(voiced_flag) > 1 else 0.0,
     }
 
-    # Energy (RMS)
+    # Energy
     rms = librosa.feature.rms(y=y)[0]
     energy_feats = {
         "rms_mean": np.mean(rms),
-        "rms_std": np.std(rms),
-        "rms_max": np.max(rms),
-        "rms_skew": skew(rms) if len(rms) > 2 else 0.0,
-        "rms_kurtosis": kurtosis(rms) if len(rms) > 2 else 0.0,
+        "rms_std":  np.std(rms),
+        "rms_max":  np.max(rms),
     }
 
-    # Tempo (more reliable)
-    tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
-    try:
-        tempo = float(tempo) if np.ndim(tempo) == 0 else float(tempo[0]) if len(tempo) > 0 else 0.0
-    except (TypeError, IndexError):
-        tempo = 0.0
-
-    # Voiced / Pause ratio
+    # Rhythm
     voiced_ratio = np.mean(voiced_flag) if len(voiced_flag) else 0.0
-    # Simple pause ratio (frames with very low energy)
     energy_threshold = 0.01 * np.max(rms) if np.max(rms) > 0 else 0.0
     pause_ratio = np.mean(rms < energy_threshold)
 
-    # Delta features (keep similar)
+    # Deltas
     f0_delta = np.diff(f0_voiced) if len(f0_voiced) > 1 else np.array([0.0])
-    rms_delta = np.diff(rms) if len(rms) > 1 else np.array([0.0])
+    rms_delta = np.diff(rms)      if len(rms) > 1      else np.array([0.0])
     delta_feats = {
-        "f0_delta_mean": np.mean(f0_delta),
-        "f0_delta_std": np.std(f0_delta),
+        "f0_delta_mean":  np.mean(f0_delta),
+        "f0_delta_std":   np.std(f0_delta),
         "rms_delta_mean": np.mean(rms_delta),
-        "rms_delta_std": np.std(rms_delta),
+        "rms_delta_std":  np.std(rms_delta),
     }
 
-    # MFCCs + deltas (unchanged - keep your existing code block)
+    # MFCCs
     mfccs = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
     mfcc_feats = {}
     for i in range(13):
         mfcc_feats[f"mfcc{i}_mean"] = np.mean(mfccs[i])
-        mfcc_feats[f"mfcc{i}_std"] = np.std(mfccs[i])
+        mfcc_feats[f"mfcc{i}_std"]  = np.std(mfccs[i])
 
-    if mfccs.shape[1] < 3:
-        mfcc_delta_feats = {f"mfcc{i}_delta_mean": 0.0 for i in range(13)}
-        mfcc_delta_feats.update({f"mfcc{i}_delta_std": 0.0 for i in range(13)})
-    else:
-        delta_width = min(9, mfccs.shape[1] if mfccs.shape[1] % 2 == 1 else mfccs.shape[1] - 1)
-        delta_width = max(3, delta_width)
-        mfcc_deltas = librosa.feature.delta(mfccs, width=delta_width)
-        mfcc_delta_feats = {}
-        for i in range(13):
-            mfcc_delta_feats[f"mfcc{i}_delta_mean"] = np.mean(mfcc_deltas[i])
-            mfcc_delta_feats[f"mfcc{i}_delta_std"] = np.std(mfcc_deltas[i])
-
-    # Spectral features (keep your existing)
-    centroid = librosa.feature.spectral_centroid(y=y, sr=sr)[0]
+    # Spectral shape
+    centroid  = librosa.feature.spectral_centroid(y=y, sr=sr)[0]
     bandwidth = librosa.feature.spectral_bandwidth(y=y, sr=sr)[0]
-    rolloff = librosa.feature.spectral_rolloff(y=y, sr=sr)[0]
-    flatness = librosa.feature.spectral_flatness(y=y)[0]
+    rolloff   = librosa.feature.spectral_rolloff(y=y, sr=sr)[0]
+    flatness  = librosa.feature.spectral_flatness(y=y)[0]
     spectral_feats = {
-        "spectral_centroid_mean": np.mean(centroid),
-        "spectral_centroid_std": np.std(centroid),
-        "spectral_bandwidth_mean": np.mean(bandwidth),
-        "spectral_bandwidth_std": np.std(bandwidth),
-        "spectral_rolloff_mean": np.mean(rolloff),
-        "spectral_rolloff_std": np.std(rolloff),
-        "spectral_flatness_mean": np.mean(flatness),
-        "spectral_flatness_std": np.std(flatness),
+        "spectral_centroid_mean":   np.mean(centroid),
+        "spectral_centroid_std":    np.std(centroid),
+        "spectral_bandwidth_mean":  np.mean(bandwidth),
+        "spectral_bandwidth_std":   np.std(bandwidth),
+        "spectral_rolloff_mean":    np.mean(rolloff),
+        "spectral_rolloff_std":     np.std(rolloff),
+        "spectral_flatness_mean":   np.mean(flatness),
+        "spectral_flatness_std":    np.std(flatness),
     }
 
+    # Spectral flux
     stft = np.abs(librosa.stft(y))
     spectral_flux = np.sqrt(np.sum(np.diff(stft, axis=1) ** 2, axis=0))
     spectral_flux_feats = {
         "spectral_flux_mean": np.mean(spectral_flux),
-        "spectral_flux_std": np.std(spectral_flux),
+        "spectral_flux_std":  np.std(spectral_flux),
     }
 
-    # === Voice Quality + Formants with Parselmouth (biggest improvement) ===
+    # Spectral entropy
+    spec_entropy = spectral_entropy(stft)
+    spectral_entropy_feats = {
+        "spectral_entropy_mean": np.mean(spec_entropy),
+        "spectral_entropy_std":  np.std(spec_entropy),
+    }
+
+    # Zero crossing rate
+    zcr = librosa.feature.zero_crossing_rate(y)[0]
+    zcr_feats = {
+        "zcr_mean": np.mean(zcr),
+        "zcr_std":  np.std(zcr),
+    }
+
+    # Voice quality
     sound = parselmouth.Sound(y, sr)
     try:
         point_process = parselmouth.praat.call(sound, "To PointProcess (periodic, cc)", 75, 600)
-        jitter = parselmouth.praat.call(point_process, "Get jitter (local)", 0, 0, 0.0001, 0.02, 1.3)
-        shimmer = parselmouth.praat.call([sound, point_process], "Get shimmer (local)", 0, 0, 0.0001, 0.02, 1.3, 1.6)
-        
+        jitter   = parselmouth.praat.call(point_process, "Get jitter (local)", 0, 0, 0.0001, 0.02, 1.3)
+        shimmer  = parselmouth.praat.call([sound, point_process], "Get shimmer (local)", 0, 0, 0.0001, 0.02, 1.3, 1.6)
         harmonicity = sound.to_harmonicity()
         hnr = parselmouth.praat.call(harmonicity, "Get mean", 0, 0) if harmonicity else 0.0
-    except Exception:
+    except Exception as e:
+        print(f"Voice quality failed: {e}")
         jitter, shimmer, hnr = 0.0, 0.0, 0.0
 
-    # Formants (Burg method - very useful for spoof detection)
+    # CPP
     try:
-        formant = parselmouth.praat.call(sound, "To Formant (burg)", 0.0, 5, 5500, 0.025, 50)
+        cpp_obj = parselmouth.praat.call(sound, "To PowerCepstrogram", 60, 0.002, 5000, 50)
+        cpps = parselmouth.praat.call(cpp_obj, "Get CPPS", "yes", 0.02, 0.0, 60, 330, 0.05, "Parabolic", 0.001, 0, "Exponential decay", "Robust")
+    except Exception as e:
+        print(f"CPP failed: {e}")
+        cpps = 0.0
+
+    # Formants with pre-emphasis
+    try:
+        sound_preemph = parselmouth.praat.call(sound, "Filter (pre-emphasis)", 50)
+        formant = parselmouth.praat.call(sound_preemph, "To Formant (burg)", 0.0, 5, 5500, 0.025, 50)
         f1_mean = parselmouth.praat.call(formant, "Get mean", 1, 0, 0)
-        f1_std = parselmouth.praat.call(formant, "Get standard deviation", 1, 0, 0)
+        f1_std  = parselmouth.praat.call(formant, "Get standard deviation", 1, 0, 0)
         f2_mean = parselmouth.praat.call(formant, "Get mean", 2, 0, 0)
-        f2_std = parselmouth.praat.call(formant, "Get standard deviation", 2, 0, 0)
+        f2_std  = parselmouth.praat.call(formant, "Get standard deviation", 2, 0, 0)
         f3_mean = parselmouth.praat.call(formant, "Get mean", 3, 0, 0)
-        f3_std = parselmouth.praat.call(formant, "Get standard deviation", 3, 0, 0)
-    except Exception:
+        f3_std  = parselmouth.praat.call(formant, "Get standard deviation", 3, 0, 0)
+    except Exception as e:
+        print(f"Formant failed: {e}")
         f1_mean = f1_std = f2_mean = f2_std = f3_mean = f3_std = 0.0
 
     voice_quality_feats = {
         "jitter": jitter,
         "shimmer": shimmer,
         "harmonics_to_noise_ratio": hnr,
+        "cpps": cpps,
         "f1_mean": f1_mean, "f1_std": f1_std,
         "f2_mean": f2_mean, "f2_std": f2_std,
         "f3_mean": f3_mean, "f3_std": f3_std,
     }
 
-    # Chroma (unchanged)
-    chroma = librosa.feature.chroma_stft(y=y, sr=sr)
-    chroma_feats = {
-        "chroma_mean": np.mean(chroma),
-        "chroma_std": np.std(chroma),
-    }
-
-    # Combine all
     features = {
         **pitch_feats,
         **energy_feats,
-        "tempo": tempo,
         "voiced_ratio": voiced_ratio,
-        "pause_ratio": pause_ratio,
+        "pause_ratio":  pause_ratio,
         **delta_feats,
         **mfcc_feats,
-        **mfcc_delta_feats,
         **spectral_feats,
         **spectral_flux_feats,
+        **spectral_entropy_feats,
+        **zcr_feats,
         **voice_quality_feats,
-        **chroma_feats,
     }
 
-    # Safe NaN handling
     for k in features:
         if np.isnan(features[k]) or np.isinf(features[k]):
             features[k] = 0.0
 
     return features
-
